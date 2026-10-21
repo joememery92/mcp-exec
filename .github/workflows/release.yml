@@ -1,0 +1,71 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号，例如 v0.1.0"
+        required: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          go build -trimpath -ldflags "-s -w -X github.com/joememery92/mcp-exec/internal/mcp.Version=$VERSION" \
+            -o "dist/mcpnode-linux-${{ matrix.arch }}" ./cmd/mcpnode
+          chmod +x dist/mcpnode-linux-*
+
+      - name: Self-check
+        if: matrix.arch == 'amd64'
+        run: |
+          ./dist/mcpnode-linux-amd64 -version
+          ./dist/mcpnode-linux-amd64 -h >/dev/null 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpnode-linux-${{ matrix.arch }}
+          path: dist/mcpnode-linux-${{ matrix.arch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mcpnode-linux-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        working-directory: dist
+        run: |
+          chmod +x mcpnode-linux-*
+          sha256sum mcpnode-linux-* > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          files: |
+            dist/mcpnode-linux-*
+            dist/SHA256SUMS
+          generate_release_notes: true
